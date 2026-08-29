@@ -1,0 +1,62 @@
+{
+  "name": "@aybinv7/capacitor-tcp-print",
+  "version": "0.1.0",
+  "description": "Minimal Capacitor plugin that sends raw printer bytes (ESC/POS etc.) to a LAN printer over a TCP socket (RAW/JetDirect, typically port 9100). Stateless connect-per-print: open, write, close.",
+  "main": "dist/plugin.cjs.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "unpkg": "dist/plugin.js",
+  "files": [
+    "android/src/main/",
+    "android/build.gradle",
+    "dist/",
+    "ios/Plugin/",
+    "CapacitorTcpPrint.podspec",
+    "Package.swift"
+  ],
+  "author": "devsaranweb",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devsaranweb/capacitor-tcp-print.git"
+  },
+  "keywords": [
+    "capacitor",
+    "plugin",
+    "native",
+    "tcp",
+    "socket",
+    "network",
+    "lan",
+    "escpos",
+    "jetdirect",
+    "9100",
+    "thermal",
+    "printer",
+    "android",
+    "ios"
+  ],
+  "scripts": {
+    "build": "rimraf ./dist && tsc && rollup -c rollup.config.mjs",
+    "watch": "tsc --watch"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/ios": "^8.0.0",
+    "rimraf": "^3.0.2",
+    "rollup": "^2.79.2",
+    "typescript": "^5.6.3"
+  },
+  "peerDependencies": {
+    "@capacitor/core": ">=7.0.0"
+  },
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
+    "android": {
+      "src": "android"
+    }
+  }
+}
