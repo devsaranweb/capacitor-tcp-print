@@ -13,6 +13,10 @@ import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Stateless raw-TCP print transport (RAW / JetDirect, typically port 9100).
@@ -39,6 +43,7 @@ public class TcpPrintPlugin extends Plugin {
     private static final int DEFAULT_TIMEOUT_MS = 5000;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ScheduledExecutorService timeoutExecutor = Executors.newSingleThreadScheduledExecutor();
 
     @PluginMethod
     public void print(PluginCall call) {
@@ -76,6 +81,13 @@ public class TcpPrintPlugin extends Plugin {
         final int deadline = timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
 
         executor.execute(() -> {
+            // The deadline starts when the job STARTS, never when it was
+            // queued: this executor is serial, so a print waiting behind a
+            // slow one would otherwise spend its whole budget in the queue and
+            // reject TIMEOUT without ever reaching the network. `timeoutMs` is
+            // documented as a connect+write deadline, not a submit-to-settle one.
+            final long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(deadline);
+            AtomicBoolean settled = new AtomicBoolean(false);
             // The connect phase writes nothing, so distinguishing it from the
             // write phase is what lets hosts retry a CONNECT_FAILED safely
             // while treating WRITE_FAILED as "maybe half-printed".
@@ -83,34 +95,65 @@ public class TcpPrintPlugin extends Plugin {
                 try {
                     socket.connect(new InetSocketAddress(targetHost, targetPort), deadline);
                 } catch (SocketTimeoutException e) {
-                    call.reject("Connect to " + targetHost + ":" + targetPort + " timed out", CODE_TIMEOUT);
+                    if (settled.compareAndSet(false, true)) {
+                        call.reject("Connect to " + targetHost + ":" + targetPort + " timed out", CODE_TIMEOUT);
+                    }
                     return;
                 } catch (Exception e) {
-                    call.reject(
-                        "Could not connect to " + targetHost + ":" + targetPort + ": " + e.getMessage(),
-                        CODE_CONNECT_FAILED
-                    );
+                    if (settled.compareAndSet(false, true)) {
+                        call.reject(
+                            "Could not connect to " + targetHost + ":" + targetPort + ": " + e.getMessage(),
+                            CODE_CONNECT_FAILED
+                        );
+                    }
                     return;
                 }
+
+                long writeRemainingNanos = deadlineNanos - System.nanoTime();
+                if (writeRemainingNanos <= 0) {
+                    settled.set(true);
+                    call.reject("Print to " + targetHost + ":" + targetPort + " timed out", CODE_TIMEOUT);
+                    return;
+                }
+                ScheduledFuture<?> writeTimeout = timeoutExecutor.schedule(() -> {
+                    if (!settled.compareAndSet(false, true)) return;
+                    call.reject("Print to " + targetHost + ":" + targetPort + " timed out", CODE_TIMEOUT);
+                    try {
+                        // Closing the socket from the timer thread interrupts a
+                        // blocked write and releases the serial print executor.
+                        socket.close();
+                    } catch (Exception ignored) {
+                        // The promise is already settled as TIMEOUT.
+                    }
+                }, writeRemainingNanos, TimeUnit.NANOSECONDS);
                 try {
-                    // SO_TIMEOUT bounds reads; writes block on the send buffer
-                    // instead, which a powered-off-mid-job printer can wedge —
-                    // the send buffer (typically >64KB, receipts are a few KB)
-                    // usually absorbs the whole job, so a hard wedge here is
-                    // rare and the host's own print timeout is the backstop.
-                    socket.setSoTimeout(deadline);
                     OutputStream out = socket.getOutputStream();
                     out.write(bytes);
                     out.flush();
                 } catch (Exception e) {
-                    call.reject("Write to printer failed: " + e.getMessage(), CODE_WRITE_FAILED);
+                    if (settled.compareAndSet(false, true)) {
+                        writeTimeout.cancel(false);
+                        call.reject("Write to printer failed: " + e.getMessage(), CODE_WRITE_FAILED);
+                    }
                     return;
                 }
-                call.resolve();
+                if (settled.compareAndSet(false, true)) {
+                    writeTimeout.cancel(false);
+                    call.resolve();
+                }
             } catch (Exception e) {
-                // Socket close failure after a successful write — the job is
-                // on the wire; do not fail a print that happened.
-                call.resolve();
+                // Reachable two ways, and the CAS is what tells them apart:
+                // `new Socket()` failing (nothing opened, nothing written, so
+                // CONNECT_FAILED is both accurate and safe to retry), or
+                // try-with-resources failing to CLOSE after the job already
+                // settled — the bytes are on the wire, so that one must not
+                // fail a print that happened, and the CAS drops it.
+                if (settled.compareAndSet(false, true)) {
+                    call.reject(
+                        "Could not open socket to " + targetHost + ":" + targetPort + ": " + e.getMessage(),
+                        CODE_CONNECT_FAILED
+                    );
+                }
             }
         });
     }
@@ -118,6 +161,7 @@ public class TcpPrintPlugin extends Plugin {
     @Override
     protected void handleOnDestroy() {
         executor.shutdown();
+        timeoutExecutor.shutdown();
         super.handleOnDestroy();
     }
 }
