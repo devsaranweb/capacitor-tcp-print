@@ -1,7 +1,7 @@
 {
   "name": "@aybinv7/capacitor-tcp-print",
-  "version": "0.1.1",
-  "description": "Minimal Capacitor plugin that sends raw printer bytes (ESC/POS etc.) to a LAN printer over a TCP socket (RAW/JetDirect, typically port 9100). Stateless connect-per-print: open, write, close.",
+  "version": "0.2.0",
+  "description": "Minimal Capacitor plugin that sends raw printer bytes (ESC/POS etc.) to a LAN printer over a TCP socket (RAW/JetDirect, typically port 9100), and discovers printers by probing the local /24 for that port. Stateless connect-per-print: open, write, close.",
   "main": "dist/plugin.cjs.js",
   "module": "dist/esm/index.js",
   "types": "dist/esm/index.d.ts",
@@ -33,6 +33,7 @@
     "9100",
     "thermal",
     "printer",
+    "discovery",
     "android",
     "ios"
   ],
